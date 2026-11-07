@@ -3,7 +3,7 @@
 PSByteContentLib
 PowerShell でバイナリを扱うための関数群。
 .NOTES
-PSByteContentLib version 1.05
+PSByteContentLib version 1.06
 
 MIT License
 
@@ -56,8 +56,7 @@ function Select-ByteContent {
         [Parameter(Position=2, ParameterSetName='First')]
         [Parameter(Position=2, ParameterSetName='Last')]
         [switch] $AsByte,
-        [Parameter(Position=3, Mandatory=$true, ValueFromPipeline=$true, ParameterSetName='First')]
-        [Parameter(Position=3, Mandatory=$true, ValueFromPipeline=$true, ParameterSetName='Last')]
+        [Parameter(Mandatory=$true, ValueFromPipeline=$true)]
         [Byte[]] $InputObject)
     begin {
         $ErrorActionPreference = [System.Management.Automation.ActionPreference]::Stop
@@ -225,9 +224,7 @@ function ConvertFrom-ByteContent {
         [Parameter(Position=4, ParameterSetName='SeparatorsHex')]
         [Parameter(Position=3, ParameterSetName='SeparatorHashHex')]
         [string] $FooterString,
-        [Parameter(Position=5, ParameterSetName='SeparatorsHex',    ValueFromPipeline=$true)]
-        [Parameter(Position=4, ParameterSetName='SeparatorHashHex', ValueFromPipeline=$true)]
-        [Parameter(Position=2, ParameterSetName='SeparatorsB64',    ValueFromPipeline=$true)]
+        [Parameter(ValueFromPipeline=$true)]
         [Byte[]] $InputObject)
     begin {
         $ErrorActionPreference = [System.Management.Automation.ActionPreference]::Stop
@@ -444,8 +441,8 @@ function ConvertTo-ByteContent {
 function Open-FileStream {
     <#
     .Synopsis
-    ファイルを開き、ファイルオブジェクトを返す。返されたファイルオブジェクト
-    は Close-Stream 関数またはオブジェクトのメソッドで閉じる必要がある。
+    ファイルを開き、ストリームオブジェクトを返す。返されたストリームオブジェ
+    クトは Close-Stream 関数またはオブジェクトのメソッドで閉じる必要がある。
     .Parameter LiteralPath
     ファイルパスを指定する。
     .Parameter FileMode
@@ -520,8 +517,7 @@ function Add-ByteContent {
         [switch] $PassThru,
         [Parameter(ParameterSetName='Stream',      Position=2)]
         [switch] $Close,
-        [Parameter(ParameterSetName='LiteralPath', Position=2, Mandatory=$true, ValueFromPipeline=$true)]
-        [Parameter(ParameterSetName='Stream',      Position=3, Mandatory=$true, ValueFromPipeline=$true)]
+        [Parameter(Mandatory=$true, ValueFromPipeline=$true)]
         [Byte[]] $InputObject)
     begin {
         $ErrorActionPreference = [System.Management.Automation.ActionPreference]::Stop
@@ -759,7 +755,7 @@ function Set-ByteContent {
         [string] $LiteralPath,
         [Parameter(ParameterSetName='LiteralPath', Position=1)]
         [switch] $PassThru,
-        [Parameter(ParameterSetName='LiteralPath', Position=2, Mandatory=$true, ValueFromPipeline=$true)]
+        [Parameter(Mandatory=$true, ValueFromPipeline=$true)]
         [Byte[]] $InputObject)
     begin {
         $ErrorActionPreference = [System.Management.Automation.ActionPreference]::Stop
@@ -955,6 +951,8 @@ function Hash-ByteContent {
     .Parameter AsString
     計算結果を HEX 文字列で出力する (既定)。明示的にオフにすると、バイト配列
     で出力する。
+    .Parameter ClearInput
+    内部バッファをクリアする。
     .Parameter InputObject
     ハッシュ値を計算するバイト列を指定する。
     #>
@@ -965,7 +963,9 @@ function Hash-ByteContent {
         [switch] $DisposeAlgorithm = $true,
         [Parameter(Position=2)]
         [switch] $AsString = $true,
-        [Parameter(Position=3, Mandatory=$true, ValueFromPipeline=$true)]
+        [Parameter(Position=3)]
+        [switch] $ClearInput,
+        [Parameter(Mandatory=$true, ValueFromPipeline=$true)]
         [Byte[]] $InputObject)
     begin {
         $ErrorActionPreference = [System.Management.Automation.ActionPreference]::Stop
@@ -1000,6 +1000,9 @@ function Hash-ByteContent {
             $Algorithms |% {
                 $_.TransformBlock($InputObject, 0, $InputObject.Length, $null, 0) | Out-Null
             }
+            if($ClearInput.IsPresent) {
+                $InputObject.Clear()
+            }
         } catch {
             $DisposeRequiredList |% {$_.Dispose()}
             throw
@@ -1011,6 +1014,11 @@ function Hash-ByteContent {
             $Algorithms |% {
                 $_.TransformFinalBlock($InputObject, 0, 0) | Out-Null
                 $result.Add($_.Hash)
+            }
+            if(-not $DisposeAlgorithm.IsPresent) {
+                $Algorithms |% {
+                    $_.Initialize()
+                }
             }
             if($AsString.IsPresent) {
                 $result |% {
@@ -1144,17 +1152,6 @@ function Hash-Stream {
             $showprogress = $true
         }
         
-        function doprogress {
-            if([datetime]::Now -gt $refreshprogress) {
-                $percent = [Math]::Min($totalread / $totallength * 100, 100)
-                Write-Progress -Activity 'Hash-Stream' -Status ('calclating... {0:0.0}%' -f $percent) -PercentComplete $percent
-                $refreshprogress = [datetime]::Now +[timespan]::FromMilliseconds(100)
-            }
-            if($ShowDotProgress.IsPresent) {
-                Write-Host '.' -NoNewline
-            }
-        }
-        
         $readlength = $MaxBufferSize
         if($showprogress) {
             while($readlength -gt 0) {
@@ -1163,7 +1160,15 @@ function Hash-Stream {
                 $Algorithms |% {
                     $_.TransformBlock($buffer, 0, $readlength, $null, 0) | Out-Null
                 }
-                doprogress
+                # doprogress
+                if([datetime]::Now -gt $refreshprogress) {
+                    $percent = [Math]::Min($totalread / $totallength * 100, 100)
+                    Write-Progress -Activity 'Hash-Stream' -Status ('calculating... {0:0.0}%' -f $percent) -PercentComplete $percent
+                    $refreshprogress = [datetime]::Now +[timespan]::FromMilliseconds(100)
+                }
+                if($ShowDotProgress.IsPresent) {
+                    Write-Host '.' -NoNewline
+                }
             }
         } else {
             while($readlength -gt 0) {
@@ -1179,6 +1184,11 @@ function Hash-Stream {
             $_.TransformFinalBlock($buffer, 0, 0) | Out-Null
             $result.Add($_.Hash)
         }
+        if(-not $DisposeAlgorithm.IsPresent) {
+            $Algorithms |% {
+                $_.Initialize()
+            }
+        }
         if($AsString.IsPresent) {
             $result |% {
                 $_ | ConvertFrom-ByteContent
@@ -1187,10 +1197,11 @@ function Hash-Stream {
             $result
         }
     } finally {
+        $disposerequiredlist |% {$_.Dispose()}
+        $buffer.Clear()
         if($showprogress) {
             Write-Progress -Activity 'Hash-Stream' -Status 'calclated' -Completed
         }
-        $disposerequiredlist |% {$_.Dispose()}
     }
 }
 
@@ -1237,8 +1248,7 @@ function Dump-ByteContent {
         [switch] $RawSurrogate,
         [Parameter(ParameterSetName='PrintableOnly', Position=5)]
         [switch] $PrintableOnly,
-        [Parameter(ParameterSetName='FullUnicode',   Position=7, Mandatory=$true, ValueFromPipeline=$true)]
-        [Parameter(ParameterSetName='PrintableOnly', Position=6, Mandatory=$true, ValueFromPipeline=$true)]
+        [Parameter(Mandatory=$true, ValueFromPipeline=$true)]
         [Byte[]] $InputObject)
     begin {
         $ErrorActionPreference = [System.Management.Automation.ActionPreference]::Stop
